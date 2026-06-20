@@ -35,7 +35,17 @@ To allow the GitHub Actions runner to commit the SQLite database (`bps_data.db`)
 5. Enter the BPS **Subject ID** you wish to scrape (default is `530` for Macroeconomic Statistics) and select the browser type (default is `chromium`).
 6. Click **Run workflow**.
 
-After completion, the workflow will commit `bps_data.db` directly to your repository, and it will also be available for download as a ZIP file under the workflow run's **Artifacts** section.
+After completion, the workflow will commit `bps_data.db` and the interactive summary page inside the `docs/` folder directly to your repository.
+
+### 3. Enable GitHub Pages to view the Interactive Dashboard
+The repository automatically generates an interactive HTML dashboard in the `docs/` folder. To view it live:
+1. Go to your repository on GitHub.
+2. Click on **Settings** -> **Pages**.
+3. Under **Build and deployment** -> **Source**, select **Deploy from a branch**.
+4. Under **Branch**, select `main` (or the branch you push to) and select `/docs` from the folder dropdown (instead of `/ (root)`).
+5. Click **Save**.
+
+Your interactive dashboard will be live at `https://<yourusername>.github.io/BSP_data_builder/`!
 
 ---
 

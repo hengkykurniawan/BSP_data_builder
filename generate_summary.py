@@ -1,0 +1,465 @@
+import os
+import sqlite3
+import datetime
+import pandas as pd
+
+DB_NAME = "bps_data.db"
+DOCS_DIR = "docs"
+
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BPS Statistics Database Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Plus+Jakarta+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --bg-color: #0b0f19;
+            --card-bg: rgba(17, 24, 39, 0.7);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.35);
+            --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            --success: #10b981;
+        }}
+
+        * {{
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }}
+
+        body {{
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 2rem 1.5rem;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.08) 0%, transparent 40%);
+            background-attachment: fixed;
+        }}
+
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+        }}
+
+        header {{
+            margin-bottom: 3rem;
+            text-align: center;
+        }}
+
+        h1 {{
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.5rem;
+            font-weight: 800;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.025em;
+        }}
+
+        .subtitle {{
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            margin-bottom: 1.5rem;
+        }}
+
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }}
+
+        .stat-card {{
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(12px);
+            text-align: center;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+        }}
+
+        .stat-val {{
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 0.25rem;
+        }}
+
+        .stat-lbl {{
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+
+        .section-title {{
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }}
+
+        .section-title::after {{
+            content: '';
+            flex-grow: 1;
+            height: 1px;
+            background: var(--card-border);
+        }}
+
+        .search-bar {{
+            width: 100%;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            color: var(--text-main);
+            font-size: 1rem;
+            margin-bottom: 2rem;
+            font-family: inherit;
+            outline: none;
+            transition: all 0.3s ease;
+        }}
+
+        .search-bar:focus {{
+            border-color: var(--accent);
+            box-shadow: 0 0 15px var(--accent-glow);
+        }}
+
+        .table-list {{
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }}
+
+        .table-item {{
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(12px);
+            transition: transform 0.2s ease, border-color 0.2s ease;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        }}
+
+        .table-item:hover {{
+            transform: translateY(-2px);
+            border-color: rgba(59, 130, 246, 0.3);
+        }}
+
+        .table-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1.5rem;
+            margin-bottom: 1rem;
+        }}
+
+        .table-title-group h3 {{
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-main);
+            margin-bottom: 0.5rem;
+        }}
+
+        .table-badge {{
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--accent);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }}
+
+        .table-actions {{
+            display: flex;
+            gap: 0.75rem;
+        }}
+
+        .btn {{
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+            color: var(--text-main);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+
+        .btn:hover {{
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--text-muted);
+        }}
+
+        .btn-primary {{
+            background: var(--accent-gradient);
+            border: none;
+        }}
+
+        .btn-primary:hover {{
+            opacity: 0.9;
+            box-shadow: 0 0 10px var(--accent-glow);
+        }}
+
+        /* Preview table styling */
+        .preview-container {{
+            margin-top: 1rem;
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid var(--card-border);
+            display: none;
+        }}
+
+        .preview-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            text-align: left;
+        }}
+
+        .preview-table th, .preview-table td {{
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--card-border);
+        }}
+
+        .preview-table th {{
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-muted);
+            font-weight: 600;
+        }}
+
+        .preview-table tr:last-child td {{
+            border-bottom: none;
+        }}
+
+        footer {{
+            margin-top: 5rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--card-border);
+            padding-top: 2rem;
+        }}
+
+        @media (max-width: 768px) {{
+            .table-header {{
+                flex-direction: column;
+                gap: 1rem;
+            }}
+            .table-actions {{
+                width: 100%;
+            }}
+            .btn {{
+                flex-grow: 1;
+                justify-content: center;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>BPS Statistics Database</h1>
+            <p class="subtitle">Structured SQLite Database Browser & Documentation</p>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-val">{num_tables}</div>
+                <div class="stat-lbl">Tables Scraped</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val">{subject_id}</div>
+                <div class="stat-lbl">BPS Subject ID</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val">{total_rows}</div>
+                <div class="stat-lbl">Total Data Rows</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val" style="font-size: 1.2rem; padding: 0.7rem 0;">{last_updated}</div>
+                <div class="stat-lbl">Last Updated</div>
+            </div>
+        </div>
+
+        <section>
+            <div class="section-title">Available Datasets</div>
+            <input type="text" id="search" class="search-bar" placeholder="Search tables by title..." oninput="filterTables()">
+            
+            <div class="table-list" id="tableList">
+                {table_items_html}
+            </div>
+        </section>
+
+        <footer>
+            <p>Generated automatically by BSP Data Builder Agent • Data source: <a href="https://www.bps.go.id" target="_blank" style="color: var(--accent); text-decoration: none;">bps.go.id</a></p>
+        </footer>
+    </div>
+
+    <script>
+        function togglePreview(id) {{
+            const el = document.getElementById('preview-' + id);
+            const btn = document.getElementById('btn-prev-' + id);
+            if (el.style.display === 'none' || el.style.display === '') {{
+                el.style.display = 'block';
+                btn.innerText = 'Hide Preview';
+            }} else {{
+                el.style.display = 'none';
+                btn.innerText = 'Show Preview';
+            }}
+        }}
+
+        function filterTables() {{
+            const query = document.getElementById('search').value.toLowerCase();
+            const items = document.querySelectorAll('.table-item');
+            
+            items.forEach(item => {{
+                const title = item.getAttribute('data-title').toLowerCase();
+                if (title.includes(query)) {{
+                    item.style.display = 'block';
+                }} else {{
+                    item.style.display = 'none';
+                }}
+            }});
+        }}
+    </script>
+</body>
+</html>
+"""
+
+def generate_summary():
+    if not os.path.exists(DB_NAME):
+        print(f"Database {DB_NAME} not found. Cannot generate summary page.")
+        # Create a basic placeholder
+        os.makedirs(DOCS_DIR, exist_ok=True)
+        with open(os.path.join(DOCS_DIR, "index.html"), "w", encoding="utf-8") as f:
+            f.write("<h1>Database not found yet. Run the scraper first.</h1>")
+        return
+
+    os.makedirs(DOCS_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    # Read table_metadata
+    try:
+        metadata_df = pd.read_sql("SELECT * FROM table_metadata", conn)
+    except Exception as e:
+        print(f"Could not read table_metadata: {e}")
+        conn.close()
+        return
+
+    num_tables = len(metadata_df)
+    subject_id = metadata_df["subject_id"].iloc[0] if num_tables > 0 else "530"
+    last_updated = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    total_rows = 0
+    table_items_html = ""
+
+    for _, row in metadata_df.iterrows():
+        t_id = row["id"]
+        title = row["title"]
+        url = row["url"]
+
+        # Find the actual table name in sqlite
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (f"data_{t_id}_%",))
+        actual_table_row = cursor.fetchone()
+        
+        preview_html = ""
+        row_count = 0
+        
+        if actual_table_row:
+            table_name = actual_table_row[0]
+            try:
+                # Get total rows
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                row_count = cursor.fetchone()[0]
+                total_rows += row_count
+
+                # Get sample data
+                sample_df = pd.read_sql(f"SELECT * FROM {table_name} LIMIT 5", conn)
+                
+                # Build HTML table for preview
+                preview_html = "<div class='preview-container' id='preview-{}'>".format(t_id)
+                preview_html += "<table class='preview-table'><thead><tr>"
+                for col in sample_df.columns:
+                    # Clean up long column names for UI display
+                    disp_col = col.replace('_', ' ')
+                    if len(disp_col) > 30:
+                        disp_col = disp_col[:27] + "..."
+                    preview_html += f"<th>{disp_col}</th>"
+                preview_html += "</tr></thead><tbody>"
+                
+                for _, s_row in sample_df.iterrows():
+                    preview_html += "<tr>"
+                    for col in sample_df.columns:
+                        val = str(s_row[col])
+                        if len(val) > 40:
+                            val = val[:37] + "..."
+                        preview_html += f"<td>{val}</td>"
+                    preview_html += "</tr>"
+                preview_html += "</tbody></table>"
+                if row_count > 5:
+                    preview_html += f"<div style='padding: 0.5rem 1rem; font-size: 0.8rem; color: var(--text-muted); text-align: center; border-top: 1px solid var(--card-border);'>Showing first 5 of {row_count} rows</div>"
+                preview_html += "</div>"
+            except Exception as e:
+                print(f"Error reading table {table_name}: {e}")
+
+        # Construct single item HTML
+        table_items_html += f"""
+        <div class="table-item" data-title="{title}">
+            <div class="table-header">
+                <div class="table-title-group">
+                    <h3>{title}</h3>
+                    <span class="table-badge">{row_count} rows</span>
+                    <span class="table-badge" style="background: rgba(139, 92, 246, 0.1); color: #8b5cf6; border-color: rgba(139, 92, 246, 0.2);">ID: {t_id}</span>
+                </div>
+                <div class="table-actions">
+                    <button class="btn" id="btn-prev-{t_id}" onclick="togglePreview('{t_id}')">Show Preview</button>
+                    <a href="{url}" target="_blank" class="btn btn-primary">Open Source</a>
+                </div>
+            </div>
+            {preview_html}
+        </div>
+        """
+
+    conn.close()
+
+    full_html = HTML_TEMPLATE.format(
+        num_tables=num_tables,
+        subject_id=subject_id,
+        total_rows=total_rows,
+        last_updated=last_updated,
+        table_items_html=table_items_html
+    )
+
+    out_path = os.path.join(DOCS_DIR, "index.html")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(full_html)
+
+    print(f"Summary page generated: {out_path}")
+
+if __name__ == "__main__":
+    generate_summary()
