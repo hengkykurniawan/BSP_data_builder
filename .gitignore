@@ -1,0 +1,7 @@
+.venv/
+chrome_profile/
+user_profile/
+downloaded_files/
+__pycache__/
+*.pyc
+bps_screenshot*.png
