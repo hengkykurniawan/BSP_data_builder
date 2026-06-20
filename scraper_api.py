@@ -137,7 +137,9 @@ def get_tables_for_subject(api_key, subject_id, domain="0000"):
             break
 
         if res.get("status") != "OK":
-            print(f"  API returned non-OK status: {res.get('status')}")
+            print(f"  API Error status: {res.get('status')}")
+            print(f"  API Error message: {res.get('message', 'no message')}")
+            print(f"  Full response: {res}")
             break
 
         data = res.get("data", [])
