@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import socket
 import sqlite3
 import urllib.request
 import urllib.parse
@@ -12,12 +13,33 @@ from requests.adapters import HTTPAdapter
 requests.packages.urllib3.disable_warnings()
 
 
+def patch_archive_dns():
+    """Resolve www.archive.bps.go.id (dead DNS) by mapping it to www.bps.go.id's IP.
+    This mirrors the /etc/hosts approach but works in pure Python."""
+    try:
+        bps_ip = socket.gethostbyname("www.bps.go.id")
+        print(f"[DNS patch] www.bps.go.id resolved to {bps_ip}")
+    except Exception as e:
+        print(f"[DNS patch] Could not resolve www.bps.go.id: {e}")
+        return
+
+    _real_getaddrinfo = socket.getaddrinfo
+
+    def _patched_getaddrinfo(host, port, *args, **kwargs):
+        if host in ("www.archive.bps.go.id", "archive.bps.go.id"):
+            print(f"[DNS patch] Redirecting {host} -> {bps_ip}")
+            host = bps_ip
+        return _real_getaddrinfo(host, port, *args, **kwargs)
+
+    socket.getaddrinfo = _patched_getaddrinfo
+    print("[DNS patch] archive.bps.go.id now mapped to www.bps.go.id IP.")
+
+
 class ForceHttpArchiveAdapter(HTTPAdapter):
-    """Custom adapter that rewrites any redirect to archive.bps.go.id back to http://
-    to avoid the broken TLS/SSL certificate on that host."""
+    """Custom adapter that rewrites any https://archive.bps.go.id redirect back
+    to http:// to bypass the broken TLS certificate on that host."""
 
     def send(self, request, **kwargs):
-        # Force http:// for archive.bps.go.id on every request
         if 'archive.bps.go.id' in request.url and request.url.startswith('https://'):
             request.url = request.url.replace('https://', 'http://', 1)
         kwargs['verify'] = False
@@ -25,7 +47,7 @@ class ForceHttpArchiveAdapter(HTTPAdapter):
 
 
 def make_session():
-    """Create a requests Session that forces http:// for archive.bps.go.id."""
+    """Create a requests Session with the ForceHttpArchiveAdapter mounted."""
     session = requests.Session()
     adapter = ForceHttpArchiveAdapter()
     session.mount('http://', adapter)
@@ -265,6 +287,9 @@ def scrape_subject(api_key, subject_id, domain="0000"):
 
 if __name__ == "__main__":
     init_db()
+
+    # Patch DNS so archive.bps.go.id (dead domain) resolves to www.bps.go.id's IP
+    patch_archive_dns()
 
     api_key = os.environ.get("BPS_API_KEY")
     subjects_to_scrape = list(DEFAULT_SUBJECTS)
