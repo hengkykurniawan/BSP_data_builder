@@ -188,32 +188,53 @@ def fetch_table_via_api(api_key, table_id, domain="0000"):
 
     data = res.get("data", {})
     if not data:
+        print(f"  -> API view: empty data field. Full response keys: {list(res.keys())}")
         return None
 
-    # The data field contains table HTML as a string or a structured dict.
-    # BPS returns the table as HTML inside the JSON — parse it with pandas.
-    table_html = None
+    # Log the data structure to understand the API response format
     if isinstance(data, dict):
-        table_html = data.get("table") or data.get("data_content") or data.get("content")
+        print(f"  -> API view: data keys = {list(data.keys())}")
+        # Check each key for HTML content
+        table_html = None
+        for key in data:
+            val = data[key]
+            if isinstance(val, str) and '<table' in val:
+                print(f"  -> Found HTML table in key '{key}' ({len(val)} chars)")
+                table_html = val
+                break
+        if not table_html:
+            # Log first 200 chars of each value for debugging
+            for key in list(data.keys())[:5]:
+                val = str(data[key])[:200]
+                print(f"  -> data['{key}'] = {val}")
     elif isinstance(data, str):
-        table_html = data
-
-    if not table_html:
-        # Try to find any HTML table-like content in the response
+        print(f"  -> API view: data is a string ({len(data)} chars), starts: {data[:200]}")
+        table_html = data if '<table' in data else None
+    elif isinstance(data, list):
+        print(f"  -> API view: data is a list of {len(data)} items")
+        # Try joining list items
         raw = json.dumps(data)
-        if '<table' in raw:
-            table_html = raw
+        table_html = raw if '<table' in raw else None
+    else:
+        print(f"  -> API view: unexpected data type: {type(data)}")
+        table_html = None
 
     if not table_html:
-        print(f"  -> API view: no table HTML found in response. Keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+        print(f"  -> API view: no <table> HTML found in response")
         return None
 
+    print(f"  -> Parsing table HTML ({len(table_html)} chars)...")
     try:
-        dfs = pd.read_html(table_html)
+        from io import StringIO
+        dfs = pd.read_html(StringIO(table_html))
         if dfs:
+            print(f"  -> Parsed {len(dfs)} table(s), first has {len(dfs[0])} rows")
             return dfs[0]
+        else:
+            print(f"  -> read_html returned empty list")
     except Exception as e:
         print(f"  -> Failed to parse API table HTML: {e}")
+        print(f"  -> HTML snippet: {table_html[:300]}")
 
     return None
 
