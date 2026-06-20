@@ -5,7 +5,10 @@ import sqlite3
 import urllib.request
 import urllib.parse
 import json
+import ssl
 import pandas as pd
+import requests
+requests.packages.urllib3.disable_warnings()
 
 BASE_API_URL = "https://webapi.bps.go.id/v1/api"
 DB_NAME = "bps_data.db"
@@ -197,9 +200,17 @@ def scrape_subject(api_key, subject_id, domain="0000"):
         save_metadata(table_id, title, source_url, subject_id, subject_name)
 
         try:
-            excel_req = urllib.request.Request(excel_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(excel_req, timeout=60) as excel_res:
-                excel_data = excel_res.read()
+            # Force http:// — the archive server has an outdated SSL cert
+            download_url = excel_url.replace('https://', 'http://')
+            resp = requests.get(
+                download_url,
+                headers={'User-Agent': 'Mozilla/5.0'},
+                timeout=60,
+                verify=False,  # archive.bps.go.id has an old/broken SSL cert
+                allow_redirects=True
+            )
+            resp.raise_for_status()
+            excel_data = resp.content
 
             temp_filename = f"temp_{table_id}.xlsx"
             with open(temp_filename, "wb") as f:
