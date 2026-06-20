@@ -33,6 +33,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pandas openpyxl
 
+      - name: Fix BPS archive DNS (map dead subdomain to live BPS IP)
+        run: |
+          # www.archive.bps.go.id is a dead DNS name; BPS archive files are served from the same host
+          BPS_IP=$(dig +short www.bps.go.id | head -1)
+          echo "BPS IP resolved: $BPS_IP"
+          echo "$BPS_IP www.archive.bps.go.id archive.bps.go.id" | sudo tee -a /etc/hosts
+          echo "Hosts file updated:"
+          grep bps /etc/hosts
+
       - name: Run API Scraper
         env:
           BPS_API_KEY: ${{ secrets.BPS_API_KEY }}
