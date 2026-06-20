@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas openpyxl
+          pip install requests pandas html5lib beautifulsoup4 lxml openpyxl
 
       - name: Run API Scraper
         env:

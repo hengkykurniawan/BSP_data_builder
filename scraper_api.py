@@ -213,6 +213,46 @@ def get_tables_for_subject(api_key, subject_id, domain="0000"):
 
     return all_tables
 
+def fetch_table_html(table_id, session):
+    """Fetch table data directly from the live BPS website HTML.
+    Falls back through multiple URL patterns."""
+    urls = [
+        f"https://www.bps.go.id/id/statistics-table/2/{table_id}/table.html",
+        f"https://www.bps.go.id/id/statistics-table/1/{table_id}/table.html",
+    ]
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'id-ID,id;q=0.9,en;q=0.8',
+        'Referer': 'https://www.bps.go.id/',
+    }
+    for url in urls:
+        try:
+            resp = session.get(url, headers=headers, timeout=30, allow_redirects=True)
+            if resp.status_code == 200 and len(resp.content) > 500:
+                return resp.text, url
+        except Exception as e:
+            print(f"  -> HTML fetch error ({url}): {e}")
+    return None, None
+
+
+def parse_html_table(html_text):
+    """Extract and parse the first <table> from HTML using pandas.read_html."""
+    try:
+        dfs = pd.read_html(html_text, flavor='html5lib')
+        if dfs:
+            return dfs[0]
+    except Exception:
+        pass
+    try:
+        dfs = pd.read_html(html_text)
+        if dfs:
+            return dfs[0]
+    except Exception:
+        pass
+    return None
+
+
 def scrape_subject(api_key, subject_id, domain="0000"):
     subject_name = ALL_SUBJECTS.get(subject_id, f"Subject {subject_id}")
     print(f"\n{'='*60}")
@@ -226,6 +266,7 @@ def scrape_subject(api_key, subject_id, domain="0000"):
 
     print(f"  Found {len(tables)} tables")
     scraped = 0
+    session = make_session()
 
     for idx, table_item in enumerate(tables, 1):
         if not isinstance(table_item, dict):
@@ -233,9 +274,8 @@ def scrape_subject(api_key, subject_id, domain="0000"):
 
         table_id = table_item.get("table_id")
         title = table_item.get("title", f"Table_{table_id}").strip()
-        excel_url = table_item.get("excel")
 
-        if not table_id or not excel_url:
+        if not table_id:
             continue
 
         print(f"\n  [{idx}/{len(tables)}] {title} (ID: {table_id})")
@@ -243,45 +283,26 @@ def scrape_subject(api_key, subject_id, domain="0000"):
         source_url = f"https://www.bps.go.id/id/statistics-table/2/{table_id}/table.html"
         save_metadata(table_id, title, source_url, subject_id, subject_name)
 
-        try:
-            # Use custom session that rewrites https://archive.bps.go.id → http://
-            # on every request AND redirect, bypassing the broken TLS cert.
-            download_url = excel_url.replace('https://', 'http://')
-            session = make_session()
-            resp = session.get(
-                download_url,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
-                timeout=60,
-                allow_redirects=True
-            )
-            resp.raise_for_status()
-            excel_data = resp.content
+        # Strategy: fetch HTML directly from live BPS website (archive Excel is dead)
+        html_text, fetched_url = fetch_table_html(table_id, session)
+        if not html_text:
+            print(f"  -> Could not fetch HTML for table {table_id}")
+            continue
 
-            if len(excel_data) < 100:
-                print(f"  -> Download returned too little data ({len(excel_data)} bytes), skipping.")
-                continue
+        df = parse_html_table(html_text)
+        if df is None or df.empty:
+            print(f"  -> No parseable table found in HTML from {fetched_url}")
+            continue
 
-            temp_filename = f"temp_{table_id}.xlsx"
-            with open(temp_filename, "wb") as f:
-                f.write(excel_data)
+        # Flatten MultiIndex columns if present
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = ['_'.join(str(c) for c in col).strip() for col in df.columns.values]
 
-            try:
-                df = pd.read_excel(temp_filename, engine='openpyxl')
-                df.dropna(how='all', inplace=True)
-                if df.empty:
-                    print(f"  -> Skipping empty table")
-                    continue
-                df.columns = [clean_table_name(str(c)) for c in df.columns]
-                db_table_name = clean_table_name(f"s{subject_id}_{table_id}_{title[:25]}")
-                store_table_data(db_table_name, df)
-                scraped += 1
-            except Exception as parse_err:
-                print(f"  -> Parse error: {parse_err}")
-            finally:
-                if os.path.exists(temp_filename):
-                    os.remove(temp_filename)
-        except Exception as dl_err:
-            print(f"  -> Download error: {dl_err}")
+        df.dropna(how='all', inplace=True)
+        df.columns = [clean_table_name(str(c)) for c in df.columns]
+        db_table_name = clean_table_name(f"s{subject_id}_{table_id}_{title[:25]}")
+        store_table_data(db_table_name, df)
+        scraped += 1
 
     return scraped
 
