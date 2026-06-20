@@ -229,8 +229,13 @@ def fetch_table_html(table_id, session):
     for url in urls:
         try:
             resp = session.get(url, headers=headers, timeout=30, allow_redirects=True)
-            if resp.status_code == 200 and len(resp.content) > 500:
+            content_len = len(resp.content)
+            print(f"  -> GET {url} => HTTP {resp.status_code}, {content_len} bytes")
+            if resp.status_code == 200 and content_len > 500:
                 return resp.text, url
+            else:
+                snippet = resp.text[:300].replace('\n', ' ')
+                print(f"     Snippet: {snippet}")
         except Exception as e:
             print(f"  -> HTML fetch error ({url}): {e}")
     return None, None
