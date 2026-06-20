@@ -1,58 +1,14 @@
 import os
 import sys
 import re
-import socket
 import sqlite3
 import urllib.request
 import urllib.parse
 import json
-import ssl
+import time
 import pandas as pd
 import requests
-from requests.adapters import HTTPAdapter
 requests.packages.urllib3.disable_warnings()
-
-
-def patch_archive_dns():
-    """Resolve www.archive.bps.go.id (dead DNS) by mapping it to www.bps.go.id's IP.
-    This mirrors the /etc/hosts approach but works in pure Python."""
-    try:
-        bps_ip = socket.gethostbyname("www.bps.go.id")
-        print(f"[DNS patch] www.bps.go.id resolved to {bps_ip}")
-    except Exception as e:
-        print(f"[DNS patch] Could not resolve www.bps.go.id: {e}")
-        return
-
-    _real_getaddrinfo = socket.getaddrinfo
-
-    def _patched_getaddrinfo(host, port, *args, **kwargs):
-        if host in ("www.archive.bps.go.id", "archive.bps.go.id"):
-            print(f"[DNS patch] Redirecting {host} -> {bps_ip}")
-            host = bps_ip
-        return _real_getaddrinfo(host, port, *args, **kwargs)
-
-    socket.getaddrinfo = _patched_getaddrinfo
-    print("[DNS patch] archive.bps.go.id now mapped to www.bps.go.id IP.")
-
-
-class ForceHttpArchiveAdapter(HTTPAdapter):
-    """Custom adapter that rewrites any https://archive.bps.go.id redirect back
-    to http:// to bypass the broken TLS certificate on that host."""
-
-    def send(self, request, **kwargs):
-        if 'archive.bps.go.id' in request.url and request.url.startswith('https://'):
-            request.url = request.url.replace('https://', 'http://', 1)
-        kwargs['verify'] = False
-        return super().send(request, **kwargs)
-
-
-def make_session():
-    """Create a requests Session with the ForceHttpArchiveAdapter mounted."""
-    session = requests.Session()
-    adapter = ForceHttpArchiveAdapter()
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    return session
 
 BASE_API_URL = "https://webapi.bps.go.id/v1/api"
 DB_NAME = "bps_data.db"
@@ -213,48 +169,52 @@ def get_tables_for_subject(api_key, subject_id, domain="0000"):
 
     return all_tables
 
-def fetch_table_html(table_id, session):
-    """Fetch table data directly from the live BPS website HTML.
-    Falls back through multiple URL patterns."""
-    urls = [
-        f"https://www.bps.go.id/id/statistics-table/2/{table_id}/table.html",
-        f"https://www.bps.go.id/id/statistics-table/1/{table_id}/table.html",
-    ]
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'id-ID,id;q=0.9,en;q=0.8',
-        'Referer': 'https://www.bps.go.id/',
-    }
-    for url in urls:
-        try:
-            resp = session.get(url, headers=headers, timeout=30, allow_redirects=True)
-            content_len = len(resp.content)
-            print(f"  -> GET {url} => HTTP {resp.status_code}, {content_len} bytes")
-            if resp.status_code == 200 and content_len > 500:
-                return resp.text, url
-            else:
-                snippet = resp.text[:300].replace('\n', ' ')
-                print(f"     Snippet: {snippet}")
-        except Exception as e:
-            print(f"  -> HTML fetch error ({url}): {e}")
-    return None, None
-
-
-def parse_html_table(html_text):
-    """Extract and parse the first <table> from HTML using pandas.read_html."""
+def fetch_table_via_api(api_key, table_id, domain="0000"):
+    """Fetch table data as JSON via the BPS API view endpoint.
+    This bypasses Cloudflare entirely since the API server has no bot protection.
+    Returns a pandas DataFrame or None."""
+    # BPS API view endpoint — returns JSON with the full table data
+    url = f"{BASE_API_URL}/view/model/statictable/lang/ind/domain/{domain}/id/{table_id}/key/{api_key}/"
     try:
-        dfs = pd.read_html(html_text, flavor='html5lib')
+        res = api_get(url, api_key)
+    except Exception as e:
+        print(f"  -> API view error: {e}")
+        return None
+
+    if res.get("status") != "OK":
+        msg = res.get("message", "unknown error")
+        print(f"  -> API view denied: {msg}")
+        return None
+
+    data = res.get("data", {})
+    if not data:
+        return None
+
+    # The data field contains table HTML as a string or a structured dict.
+    # BPS returns the table as HTML inside the JSON — parse it with pandas.
+    table_html = None
+    if isinstance(data, dict):
+        table_html = data.get("table") or data.get("data_content") or data.get("content")
+    elif isinstance(data, str):
+        table_html = data
+
+    if not table_html:
+        # Try to find any HTML table-like content in the response
+        raw = json.dumps(data)
+        if '<table' in raw:
+            table_html = raw
+
+    if not table_html:
+        print(f"  -> API view: no table HTML found in response. Keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+        return None
+
+    try:
+        dfs = pd.read_html(table_html)
         if dfs:
             return dfs[0]
-    except Exception:
-        pass
-    try:
-        dfs = pd.read_html(html_text)
-        if dfs:
-            return dfs[0]
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  -> Failed to parse API table HTML: {e}")
+
     return None
 
 
@@ -271,7 +231,6 @@ def scrape_subject(api_key, subject_id, domain="0000"):
 
     print(f"  Found {len(tables)} tables")
     scraped = 0
-    session = make_session()
 
     for idx, table_item in enumerate(tables, 1):
         if not isinstance(table_item, dict):
@@ -288,15 +247,10 @@ def scrape_subject(api_key, subject_id, domain="0000"):
         source_url = f"https://www.bps.go.id/id/statistics-table/2/{table_id}/table.html"
         save_metadata(table_id, title, source_url, subject_id, subject_name)
 
-        # Strategy: fetch HTML directly from live BPS website (archive Excel is dead)
-        html_text, fetched_url = fetch_table_html(table_id, session)
-        if not html_text:
-            print(f"  -> Could not fetch HTML for table {table_id}")
-            continue
-
-        df = parse_html_table(html_text)
+        # Primary strategy: use BPS API view endpoint (JSON, no Cloudflare block)
+        df = fetch_table_via_api(api_key, table_id, domain)
         if df is None or df.empty:
-            print(f"  -> No parseable table found in HTML from {fetched_url}")
+            print(f"  -> No data retrieved for table {table_id}")
             continue
 
         # Flatten MultiIndex columns if present
@@ -304,18 +258,20 @@ def scrape_subject(api_key, subject_id, domain="0000"):
             df.columns = ['_'.join(str(c) for c in col).strip() for col in df.columns.values]
 
         df.dropna(how='all', inplace=True)
+        if df.empty:
+            print(f"  -> Table {table_id} is empty after cleanup")
+            continue
+
         df.columns = [clean_table_name(str(c)) for c in df.columns]
         db_table_name = clean_table_name(f"s{subject_id}_{table_id}_{title[:25]}")
         store_table_data(db_table_name, df)
         scraped += 1
+        time.sleep(0.5)  # polite delay between API calls
 
     return scraped
 
 if __name__ == "__main__":
     init_db()
-
-    # Patch DNS so archive.bps.go.id (dead domain) resolves to www.bps.go.id's IP
-    patch_archive_dns()
 
     api_key = os.environ.get("BPS_API_KEY")
     subjects_to_scrape = list(DEFAULT_SUBJECTS)
