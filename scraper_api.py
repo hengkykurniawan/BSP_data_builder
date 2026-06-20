@@ -8,7 +8,29 @@ import json
 import ssl
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 requests.packages.urllib3.disable_warnings()
+
+
+class ForceHttpArchiveAdapter(HTTPAdapter):
+    """Custom adapter that rewrites any redirect to archive.bps.go.id back to http://
+    to avoid the broken TLS/SSL certificate on that host."""
+
+    def send(self, request, **kwargs):
+        # Force http:// for archive.bps.go.id on every request
+        if 'archive.bps.go.id' in request.url and request.url.startswith('https://'):
+            request.url = request.url.replace('https://', 'http://', 1)
+        kwargs['verify'] = False
+        return super().send(request, **kwargs)
+
+
+def make_session():
+    """Create a requests Session that forces http:// for archive.bps.go.id."""
+    session = requests.Session()
+    adapter = ForceHttpArchiveAdapter()
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
 
 BASE_API_URL = "https://webapi.bps.go.id/v1/api"
 DB_NAME = "bps_data.db"
@@ -200,17 +222,22 @@ def scrape_subject(api_key, subject_id, domain="0000"):
         save_metadata(table_id, title, source_url, subject_id, subject_name)
 
         try:
-            # Force http:// — the archive server has an outdated SSL cert
+            # Use custom session that rewrites https://archive.bps.go.id → http://
+            # on every request AND redirect, bypassing the broken TLS cert.
             download_url = excel_url.replace('https://', 'http://')
-            resp = requests.get(
+            session = make_session()
+            resp = session.get(
                 download_url,
-                headers={'User-Agent': 'Mozilla/5.0'},
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
                 timeout=60,
-                verify=False,  # archive.bps.go.id has an old/broken SSL cert
                 allow_redirects=True
             )
             resp.raise_for_status()
             excel_data = resp.content
+
+            if len(excel_data) < 100:
+                print(f"  -> Download returned too little data ({len(excel_data)} bytes), skipping.")
+                continue
 
             temp_filename = f"temp_{table_id}.xlsx"
             with open(temp_filename, "wb") as f:
