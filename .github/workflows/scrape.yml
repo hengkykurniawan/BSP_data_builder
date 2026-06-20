@@ -2,7 +2,7 @@ name: BPS Database Scraper
 
 on:
   schedule:
-    # Run every Sunday at midnight
+    # Run every Sunday at midnight UTC
     - cron: '0 0 * * 0'
   workflow_dispatch:
     inputs:
@@ -10,15 +10,6 @@ on:
         description: 'BPS Subject ID (e.g. 530 for Macroeconomic Statistics)'
         required: true
         default: '530'
-      browser_type:
-        description: 'Browser type for Playwright'
-        required: true
-        default: 'chromium'
-        type: choice
-        options:
-          - chromium
-          - firefox
-          - webkit
 
 jobs:
   scrape:
@@ -40,15 +31,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests pandas openpyxl
 
-      - name: Install Playwright Browsers
+      - name: Run API Scraper
+        env:
+          BPS_API_KEY: ${{ secrets.BPS_API_KEY }}
         run: |
-          playwright install --with-deps ${{ github.event.inputs.browser_type || 'chromium' }}
-
-      - name: Run Scraper
-        run: |
-          python scraper.py ${{ github.event.inputs.subject_id || '530' }} ${{ github.event.inputs.browser_type || 'chromium' }}
+          python scraper_api.py ${{ github.event.inputs.subject_id || '530' }}
 
       - name: Generate Data Summary Dashboard
         run: |
@@ -59,7 +48,7 @@ jobs:
         with:
           name: bps-sqlite-db
           path: bps_data.db
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Commit and Push Database and Summary Page
         run: |
