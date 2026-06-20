@@ -72,6 +72,15 @@ DEFAULT_SUBJECTS = [3, 8, 11, 13, 169, 6, 23, 26]
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    # Check if table exists and has the right schema; drop & recreate if not
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='table_metadata'")
+    exists = cursor.fetchone()
+    if exists:
+        cursor.execute("PRAGMA table_info(table_metadata)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if "subject_name" not in cols:
+            print("Migrating database schema (adding subject_name column)...")
+            cursor.execute("DROP TABLE table_metadata")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS table_metadata (
             id TEXT PRIMARY KEY,
@@ -128,19 +137,28 @@ def get_tables_for_subject(api_key, subject_id, domain="0000"):
             break
 
         if res.get("status") != "OK":
+            print(f"  API returned non-OK status: {res.get('status')}")
             break
 
         data = res.get("data", [])
+
+        # data-availability check
+        if res.get("data-availability") == "list-not-available":
+            break
+
+        # API returns: data = [meta_dict, [table1, table2, ...]]
         if not isinstance(data, list) or len(data) < 2:
             break
 
-        meta = data[0]
-        tables = data[1]
-        if not isinstance(tables, list):
+        meta = data[0]   # {page, pages, per_page, count, total}
+        tables = data[1] # [[table1, table2, ...]] — nested list
+
+        if not isinstance(tables, list) or len(tables) == 0:
             break
 
         all_tables.extend(tables)
-        total_pages = meta.get("pages", 1)
+        total_pages = meta.get("pages", 1) if isinstance(meta, dict) else 1
+        print(f"  Page {page}/{total_pages}: fetched {len(tables)} tables (total so far: {len(all_tables)})")
         if page >= total_pages:
             break
 
