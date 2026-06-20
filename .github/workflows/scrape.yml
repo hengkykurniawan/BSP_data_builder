@@ -6,10 +6,10 @@ on:
     - cron: '0 0 * * 0'
   workflow_dispatch:
     inputs:
-      subject_id:
-        description: 'BPS Subject ID (e.g. 530 for Macroeconomic Statistics)'
-        required: true
-        default: '530'
+      subject_ids:
+        description: 'Comma-separated BPS Subject IDs (e.g. 3,8,11) or "all" for everything'
+        required: false
+        default: '3,8,11,13,169,6,23,26'
 
 jobs:
   scrape:
@@ -37,7 +37,7 @@ jobs:
         env:
           BPS_API_KEY: ${{ secrets.BPS_API_KEY }}
         run: |
-          python scraper_api.py ${{ github.event.inputs.subject_id || '530' }}
+          python scraper_api.py "${{ github.event.inputs.subject_ids || '3,8,11,13,169,6,23,26' }}"
 
       - name: Generate Data Summary Dashboard
         run: |

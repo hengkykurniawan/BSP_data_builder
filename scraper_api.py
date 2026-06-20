@@ -10,6 +10,65 @@ import pandas as pd
 BASE_API_URL = "https://webapi.bps.go.id/v1/api"
 DB_NAME = "bps_data.db"
 
+# All available BPS subject IDs and their names (from API discovery)
+ALL_SUBJECTS = {
+    2: "Komunikasi",
+    3: "Inflasi",
+    4: "Konstruksi",
+    5: "Konsumsi dan Pengeluaran",
+    6: "Tenaga Kerja",
+    7: "Energi",
+    8: "Ekspor-Impor",
+    9: "Industri Besar dan Sedang",
+    10: "Pertambangan",
+    11: "Produk Domestik Bruto (Lapangan Usaha)",
+    12: "Kependudukan",
+    13: "Keuangan",
+    16: "Pariwisata",
+    17: "Transportasi",
+    19: "Upah Buruh",
+    20: "Harga Perdagangan Besar",
+    22: "Nilai Tukar Petani",
+    23: "Kemiskinan dan Ketimpangan",
+    24: "Peternakan",
+    25: "ITB-ITK",
+    26: "Indeks Pembangunan Manusia",
+    27: "Sosial Budaya",
+    28: "Pendidikan",
+    29: "Perumahan",
+    30: "Kesehatan",
+    34: "Politik dan Keamanan",
+    35: "Usaha Mikro Kecil",
+    36: "Harga Produsen",
+    40: "Gender",
+    52: "Produk Domestik Regional Bruto (Lapangan Usaha)",
+    53: "Tanaman Pangan",
+    54: "Perkebunan",
+    55: "Hortikultura",
+    56: "Perikanan",
+    60: "Kehutanan",
+    100: "Neraca Arus Dana",
+    101: "Pemerintahan",
+    102: "Harga Eceran",
+    104: "Neraca Sosial Ekonomi",
+    105: "Input output",
+    151: "Iklim",
+    152: "Lingkungan Hidup",
+    153: "Geografi",
+    168: "Potensi Desa",
+    169: "Produk Domestik Bruto (Pengeluaran)",
+    170: "Industri Mikro dan Kecil",
+    171: "Produk Domestik Regional Bruto (Pengeluaran)",
+    173: "Perdagangan Dalam Negeri",
+    178: "Neraca Institusi Terintegrasi",
+    179: "Matrik Investasi",
+    180: "Tujuan Pembangunan Berkelanjutan 2025",
+    181: "Tujuan Pembangunan Berkelanjutan Edisi I",
+}
+
+# Default subjects to scrape (key economic indicators)
+DEFAULT_SUBJECTS = [3, 8, 11, 13, 169, 6, 23, 26]
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -19,6 +78,7 @@ def init_db():
             title TEXT,
             url TEXT,
             subject_id TEXT,
+            subject_name TEXT,
             fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -39,115 +99,144 @@ def store_table_data(table_name, df):
     df_str = df.astype(str)
     df_str.to_sql(table_name, conn, if_exists='replace', index=False)
     conn.close()
-    print(f"Stored table: {table_name} ({len(df)} rows)")
+    print(f"  -> Stored: {table_name} ({len(df)} rows)")
 
-def save_metadata(table_id, title, url, subject_id):
+def save_metadata(table_id, title, url, subject_id, subject_name):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT OR REPLACE INTO table_metadata (id, title, url, subject_id)
-        VALUES (?, ?, ?, ?)
-    """, (str(table_id), title, url, subject_id))
+        INSERT OR REPLACE INTO table_metadata (id, title, url, subject_id, subject_name)
+        VALUES (?, ?, ?, ?, ?)
+    """, (str(table_id), title, url, str(subject_id), subject_name))
     conn.commit()
     conn.close()
 
-def scrape_via_api(api_key, subject_id="530", domain="0000"):
-    print(f"Starting API scrape for subject: {subject_id} on domain: {domain}")
-    
-    # 1. Fetch static tables list for the subject
-    list_url = f"{BASE_API_URL}/list/model/statictable/key/{api_key}/domain/{domain}/subject/{subject_id}/"
-    print(f"Fetching tables list from: {list_url.replace(api_key, '***')}")
-    
-    try:
-        req = urllib.request.Request(list_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req) as response:
-            res_json = json.loads(response.read().decode('utf-8'))
-    except Exception as e:
-        print(f"Failed to fetch list from API: {e}")
-        return
+def api_get(url, api_key):
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode('utf-8'))
 
-    if res_json.get("status") == "Error":
-        print(f"BPS API Error: {res_json.get('message')}")
-        return
+def get_tables_for_subject(api_key, subject_id, domain="0000"):
+    """Fetch all static tables for a given subject, handling pagination."""
+    all_tables = []
+    for page in range(1, 100):
+        url = f"{BASE_API_URL}/list/model/statictable/key/{api_key}/domain/{domain}/subject/{subject_id}/page/{page}/"
+        try:
+            res = api_get(url, api_key)
+        except Exception as e:
+            print(f"  API error on page {page}: {e}")
+            break
 
-    tables_data = res_json.get("data", [])
-    if not tables_data or len(tables_data) == 0:
-        if isinstance(tables_data, list):
-            print(f"No static tables found for subject {subject_id}.")
-        else:
-            print("Unexpected API response structure:", res_json)
-        return
+        if res.get("status") != "OK":
+            break
 
-    print(f"Found {len(tables_data)} tables in BPS API response.")
-    
-    for idx, table_item in enumerate(tables_data, 1):
+        data = res.get("data", [])
+        if not isinstance(data, list) or len(data) < 2:
+            break
+
+        meta = data[0]
+        tables = data[1]
+        if not isinstance(tables, list):
+            break
+
+        all_tables.extend(tables)
+        total_pages = meta.get("pages", 1)
+        if page >= total_pages:
+            break
+
+    return all_tables
+
+def scrape_subject(api_key, subject_id, domain="0000"):
+    subject_name = ALL_SUBJECTS.get(subject_id, f"Subject {subject_id}")
+    print(f"\n{'='*60}")
+    print(f"Scraping subject {subject_id}: {subject_name}")
+    print(f"{'='*60}")
+
+    tables = get_tables_for_subject(api_key, subject_id, domain)
+    if not tables:
+        print(f"  No tables found for subject {subject_id}")
+        return 0
+
+    print(f"  Found {len(tables)} tables")
+    scraped = 0
+
+    for idx, table_item in enumerate(tables, 1):
         if not isinstance(table_item, dict):
             continue
-            
+
         table_id = table_item.get("table_id")
-        title = table_item.get("title", f"Table_{table_id}")
+        title = table_item.get("title", f"Table_{table_id}").strip()
         excel_url = table_item.get("excel")
-        
+
         if not table_id or not excel_url:
             continue
-            
-        print(f"\n[{idx}/{len(tables_data)}] Processing table: {title} (ID: {table_id})")
-        
-        # Save metadata
-        source_url = f"https://www.bps.go.id/id/statistics-table/2/{table_id}/table.html" # placeholder
-        save_metadata(table_id, title, source_url, subject_id)
-        
-        # 2. Download the Excel file
-        print(f"Downloading Excel from: {excel_url.replace(api_key, '***')}")
+
+        print(f"\n  [{idx}/{len(tables)}] {title} (ID: {table_id})")
+
+        source_url = f"https://www.bps.go.id/id/statistics-table/2/{table_id}/table.html"
+        save_metadata(table_id, title, source_url, subject_id, subject_name)
+
         try:
             excel_req = urllib.request.Request(excel_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(excel_req) as excel_res:
+            with urllib.request.urlopen(excel_req, timeout=60) as excel_res:
                 excel_data = excel_res.read()
-                
-            # Save excel temporarily
+
             temp_filename = f"temp_{table_id}.xlsx"
             with open(temp_filename, "wb") as f:
                 f.write(excel_data)
-                
-            # 3. Parse Excel using pandas
+
             try:
-                df = pd.read_excel(temp_filename)
+                df = pd.read_excel(temp_filename, engine='openpyxl')
                 df.dropna(how='all', inplace=True)
+                if df.empty:
+                    print(f"  -> Skipping empty table")
+                    continue
                 df.columns = [clean_table_name(str(c)) for c in df.columns]
-                
-                db_table_name = clean_table_name(f"data_{table_id}_{title[:30]}")
+                db_table_name = clean_table_name(f"s{subject_id}_{table_id}_{title[:25]}")
                 store_table_data(db_table_name, df)
+                scraped += 1
             except Exception as parse_err:
-                print(f"Failed to parse Excel file: {parse_err}")
+                print(f"  -> Parse error: {parse_err}")
             finally:
                 if os.path.exists(temp_filename):
                     os.remove(temp_filename)
         except Exception as dl_err:
-            print(f"Failed to download/process table {table_id}: {dl_err}")
+            print(f"  -> Download error: {dl_err}")
+
+    return scraped
 
 if __name__ == "__main__":
     init_db()
-    
-    # Load API key from env variable or sys args
+
     api_key = os.environ.get("BPS_API_KEY")
-    subject = "530"
-    
-    if len(sys.argv) > 1:
-        if len(sys.argv[1]) > 10:
-            api_key = sys.argv[1]
+    subjects_to_scrape = list(DEFAULT_SUBJECTS)
+
+    # Parse command-line args: python scraper_api.py [subject1,subject2,...] [api_key]
+    for arg in sys.argv[1:]:
+        if len(arg) > 15:  # Looks like an API key
+            api_key = arg
+        elif ',' in arg:
+            subjects_to_scrape = [int(x.strip()) for x in arg.split(',')]
+        elif arg.lower() == 'all':
+            subjects_to_scrape = list(ALL_SUBJECTS.keys())
         else:
-            subject = sys.argv[1]
-            
-    if len(sys.argv) > 2:
-        if len(sys.argv[2]) > 10:
-            api_key = sys.argv[2]
-        else:
-            subject = sys.argv[2]
-            
+            try:
+                subjects_to_scrape = [int(arg)]
+            except ValueError:
+                pass
+
     if not api_key:
         print("Error: BPS_API_KEY environment variable or argument is missing.")
-        print("Usage: python scraper_api.py [subject_id] <API_KEY>")
+        print("Usage: python scraper_api.py [subject_ids] <API_KEY>")
+        print(f"Available subject IDs: {list(ALL_SUBJECTS.keys())}")
         sys.exit(1)
-        
-    scrape_via_api(api_key, subject)
-    print("\nAPI Scraping complete.")
+
+    total_scraped = 0
+    print(f"Scraping subjects: {subjects_to_scrape}")
+    for subject_id in subjects_to_scrape:
+        count = scrape_subject(api_key, subject_id)
+        total_scraped += count
+
+    print(f"\n{'='*60}")
+    print(f"DONE. Total tables scraped: {total_scraped}")
+    print(f"Database: {DB_NAME}")
