@@ -1,8 +1,8 @@
 # BPS Database Builder Agent
 
-This is an automated agent designed to scrape and build a structured SQLite database from the official **Badan Pusat Statistik (BPS) Indonesia** website (e.g. macroeconomics, agriculture, social statistics, etc.).
+This is an automated agent designed to scrape and build a structured SQLite database from the official **Badan Pusat Statistik (BPS) Indonesia** website (e.g. macroeconomics, agriculture, social st[...]
 
-Since the BPS website uses modern web frameworks with dynamic tables and Cloudflare protection, this agent uses **Playwright** (headless browser automation) to simulate a real user browsing the pages, paginating results, and parsing table HTML into an SQLite database.
+Since the BPS website uses modern web frameworks with dynamic tables and Cloudflare protection, this agent uses **Playwright** (headless browser automation) to simulate a real user browsing the pag[...]
 
 ## How it works
 
@@ -45,7 +45,9 @@ The repository automatically generates an interactive HTML dashboard in the `doc
 4. Under **Branch**, select `main` (or the branch you push to) and select `/docs` from the folder dropdown (instead of `/ (root)`).
 5. Click **Save**.
 
-Your interactive dashboard will be live at `https://<yourusername>.github.io/BSP_data_builder/`!
+Your interactive dashboard will be live at https://hengkykurniawan.github.io/BSP_data_builder/
+
+(If you fork this repository, replace `hengkykurniawan` with your GitHub username to get your pages URL.)
 
 ---
 
