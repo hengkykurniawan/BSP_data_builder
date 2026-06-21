@@ -6,6 +6,7 @@ import urllib.request
 import urllib.parse
 import json
 import time
+import html
 import pandas as pd
 import requests
 requests.packages.urllib3.disable_warnings()
@@ -198,23 +199,27 @@ def fetch_table_via_api(api_key, table_id, domain="0000"):
         table_html = None
         for key in data:
             val = data[key]
-            if isinstance(val, str) and '<table' in val:
-                print(f"  -> Found HTML table in key '{key}' ({len(val)} chars)")
-                table_html = val
-                break
+            if isinstance(val, str):
+                val_unescaped = html.unescape(val)
+                if '<table' in val_unescaped:
+                    print(f"  -> Found HTML table in key '{key}' ({len(val_unescaped)} chars)")
+                    table_html = val_unescaped
+                    break
         if not table_html:
             # Log first 200 chars of each value for debugging
             for key in list(data.keys())[:5]:
                 val = str(data[key])[:200]
                 print(f"  -> data['{key}'] = {val}")
     elif isinstance(data, str):
-        print(f"  -> API view: data is a string ({len(data)} chars), starts: {data[:200]}")
-        table_html = data if '<table' in data else None
+        data_unescaped = html.unescape(data)
+        print(f"  -> API view: data is a string ({len(data_unescaped)} chars), starts: {data_unescaped[:200]}")
+        table_html = data_unescaped if '<table' in data_unescaped else None
     elif isinstance(data, list):
         print(f"  -> API view: data is a list of {len(data)} items")
         # Try joining list items
         raw = json.dumps(data)
-        table_html = raw if '<table' in raw else None
+        raw_unescaped = html.unescape(raw)
+        table_html = raw_unescaped if '<table' in raw_unescaped else None
     else:
         print(f"  -> API view: unexpected data type: {type(data)}")
         table_html = None
