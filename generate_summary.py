@@ -383,8 +383,12 @@ def generate_summary():
         title = row["title"]
         url = row["url"]
 
-        # Find the actual table name in sqlite
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (f"data_{t_id}_%",))
+        # Find the actual table name in sqlite (supporting both scraper.py and scraper_api.py naming formats)
+        sub_id = row.get("subject_id", "")
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE ? OR name LIKE ? OR name LIKE ?)",
+            (f"data_{t_id}_%", f"s{sub_id}_{t_id}_%", f"s%_{t_id}_%")
+        )
         actual_table_row = cursor.fetchone()
         
         preview_html = ""
